@@ -57,6 +57,20 @@ main { padding-top: 14px; padding-bottom: 40px; }
 .ligne { font-size: 14px; }
 .lieu { font-size: 13px; color: var(--doux); }
 .rien { color: var(--doux); padding: 40px 0; text-align: center; }
+.vues { display: inline-flex; border: 1px solid var(--bord); border-radius: 8px; overflow: hidden; }
+.outils .vues button { border: none; border-radius: 0; padding: 7px 12px; }
+.outils .vues button[aria-pressed=true] { background: var(--texte); color: var(--fond); }
+.defile { overflow-x: auto; border: 1px solid var(--bord); border-radius: 12px; background: var(--carte); }
+table.liste { border-collapse: collapse; width: 100%; font-size: 14px; white-space: nowrap; }
+table.liste th { position: sticky; top: 0; background: var(--carte); text-align: left; font-size: 12px; font-weight: 600; color: var(--doux); padding: 8px 10px; border-bottom: 1px solid var(--bord); }
+table.liste th[data-tri] { cursor: pointer; }
+table.liste th.actif { color: var(--texte); }
+table.liste td { padding: 6px 10px; border-bottom: 1px solid var(--bord); }
+table.liste tbody tr { cursor: pointer; }
+table.liste tbody tr:hover { background: var(--gris-fond); }
+table.liste td.num { text-align: right; font-variant-numeric: tabular-nums; }
+table.liste img { width: 64px; height: 44px; object-fit: cover; border-radius: 4px; display: block; background: var(--gris-fond); }
+table.liste .score { position: static; display: inline-block; }
 dialog { width: min(900px, 100vw); max-width: 100vw; max-height: 100dvh; padding: 0; border: none; border-radius: 14px; background: var(--carte); color: var(--texte); }
 dialog::backdrop { background: rgb(0 0 0 / .55); }
 @media (max-width: 640px) { dialog { border-radius: 0; width: 100vw; height: 100dvh; margin: 0; } }
@@ -113,6 +127,7 @@ dialog::backdrop { background: rgb(0 0 0 / .55); }
   <label>Distance max (km)<input id="distMax" type="number" inputmode="numeric" step="100" placeholder="1 500"></label>
   <label class="case"><input id="fav" type="checkbox"> ★ Favoris seulement</label>
   <button id="raz" type="button">Réinitialiser</button>
+  <div class="vues" role="group" aria-label="Affichage"><button type="button" data-vue="tableau">Tableau</button><button type="button" data-vue="cartes">Cartes</button></div>
   <div class="compte" id="compte"></div>
 </div>
 <main><div class="grille" id="grille"></div></main>
@@ -129,6 +144,8 @@ const duree = (m) => (m == null ? "" : ` (${Math.floor(m / 60)} h ${String(m % 6
 const dateFr = (d) => (d ? d.slice(0, 10).split("-").reverse().join("/") : "?");
 const $ = (id) => document.getElementById(id);
 const champs = ["q", "tri", "prixMax", "kmMax", "anneeMin", "pays", "distMax", "fav"];
+// Tableau par défaut sur ordinateur, cartes sur téléphone ; le choix est mémorisé.
+let vue = (() => { try { return localStorage.getItem("vue"); } catch { return null; } })() || (matchMedia("(max-width: 700px)").matches ? "cartes" : "tableau");
 
 $("sous").textContent = `${V.length} voitures en lice · mise à jour le ${D.maj}`;
 if (!V.some((v) => v.favori)) $("fav").closest("label").hidden = true;
@@ -162,7 +179,10 @@ function afficher() {
     (!fav || v.favori)
   ).sort((a, b) => cles[$("tri").value](a) - cles[$("tri").value](b));
   $("compte").textContent = liste.length === V.length ? `${V.length} voitures` : `${liste.length} voitures sur ${V.length}`;
-  $("grille").innerHTML = liste.length ? liste.map(carte).join("") : `<p class="rien">Aucune voiture ne correspond à ces filtres.</p>`;
+  document.querySelectorAll("[data-vue]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.vue === vue)));
+  $("grille").className = vue === "cartes" ? "grille" : "";
+  if (!liste.length) $("grille").innerHTML = `<p class="rien">Aucune voiture ne correspond à ces filtres.</p>`;
+  else $("grille").innerHTML = vue === "cartes" ? liste.map(carte).join("") : tableau(liste);
   try { localStorage.setItem("filtres", JSON.stringify(Object.fromEntries(champs.map((c) => [c, $(c).type === "checkbox" ? $(c).checked : $(c).value])))); } catch {}
 }
 
@@ -180,6 +200,29 @@ function carte(v) {
       <div class="lieu">${esc([v.ville, v.pays].filter(Boolean).join(", "))}${v.distance != null ? " · " + nf.format(v.distance) + " km" : ""}</div>
     </div>
   </button>`;
+}
+
+const COLONNES = [
+  ["", null, (v) => (v.photos[0] ? `<img src="${esc(v.photos[0])}" alt="" loading="lazy" referrerpolicy="no-referrer">` : "")],
+  ["Score", "score", (v) => `<span class="score ${classeScore(v.score)}">${v.score}</span>`],
+  ["Prix", "prix", (v) => eur(v.prix), true],
+  ["Coût total", "total", (v) => eur(v.total), true],
+  ["Mise en circ.", "recent", (v) => esc(v.mec ?? "?")],
+  ["Km", "km", (v) => kmf(v.km), true],
+  ["Lieu", null, (v) => esc([v.ville, v.pays].filter(Boolean).join(", "))],
+  ["Distance", "distance", (v) => (v.distance != null ? nf.format(v.distance) + " km" : "?"), true],
+  ["Finition", null, (v) => esc(v.finition ?? "?")],
+  ["Couleur", null, (v) => esc(v.couleur ?? "?")],
+  ["Garantie", null, (v) => (v.garantie ? v.garantie + " mois" : "?"), true],
+  ["Vendeur", null, (v) => esc(v.vendeur)],
+  ["Site", null, (v) => esc(v.site)],
+];
+
+function tableau(liste) {
+  const tri = $("tri").value;
+  const tete = COLONNES.map(([t, cle]) => `<th${cle ? ` data-tri="${cle}"` : ""}${cle === tri ? ' class="actif"' : ""}>${t}${cle === tri ? " ▾" : ""}</th>`).join("");
+  const lignes = liste.map((v) => `<tr data-id="${v.id}">${COLONNES.map(([, , f, num]) => `<td${num ? ' class="num"' : ""}>${f(v)}</td>`).join("")}</tr>`).join("");
+  return `<div class="defile"><table class="liste"><thead><tr>${tete}</tr></thead><tbody>${lignes}</tbody></table></div>`;
 }
 
 function ouvrir(id, pousser = true) {
@@ -215,9 +258,16 @@ function ouvrir(id, pousser = true) {
 }
 
 $("grille").addEventListener("click", (e) => {
-  const c = e.target.closest(".carte");
+  const th = e.target.closest("th[data-tri]");
+  if (th) { $("tri").value = th.dataset.tri; afficher(); return; }
+  const c = e.target.closest(".carte, tr[data-id]");
   if (c) ouvrir(Number(c.dataset.id));
 });
+document.querySelectorAll("[data-vue]").forEach((b) => b.addEventListener("click", () => {
+  vue = b.dataset.vue;
+  try { localStorage.setItem("vue", vue); } catch {}
+  afficher();
+}));
 $("fiche").addEventListener("click", (e) => {
   if (e.target.closest("[data-fermer]") || e.target === $("fiche")) $("fiche").close();
 });
